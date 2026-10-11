@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>チャート練習帳</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0d1014">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="練習帳">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<style>
+:root{--bg:#eef0f3;--fg:#15181d;--card:#fff;--mut:#667080;--ac:#d9932b;--bd:#d5d9e0;--ok:#1d8a5a;--bad:#c4402f;--cv:#07090c;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d1014;--fg:#e6e9ee;--card:#171b21;--mut:#8f99a8;--bd:#2a313b}}
+:root[data-theme="dark"]{--bg:#0d1014;--fg:#e6e9ee;--card:#171b21;--mut:#8f99a8;--bd:#2a313b}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 -apple-system,"Hiragino Sans","Noto Sans JP",system-ui,sans-serif;overflow-x:hidden}
+#nav{position:sticky;top:env(safe-area-inset-top,0px);display:flex;gap:4px;padding:8px 12px;background:var(--bg);border-bottom:1px solid var(--bd);z-index:5}
+#nav button{flex:1;border:0;background:none;color:var(--mut);font:inherit;font-weight:600;padding:8px;border-radius:8px}
+#nav button.on{background:var(--card);color:var(--fg);box-shadow:inset 0 -2px 0 var(--ac)}
+#app{padding:12px;max-width:720px;margin:0 auto}
+button,.btn,select,input{font:inherit;color:var(--fg)}
+button,.btn{border:1px solid var(--bd);background:var(--card);padding:9px 14px;border-radius:8px;cursor:pointer;display:inline-block}
+button.pri,.btn.pri{background:var(--ac);border-color:var(--ac);color:#1a1100;font-weight:700}
+button.bad{color:var(--bad)}
+select,input{width:100%;padding:9px;border:1px solid var(--bd);border-radius:8px;background:var(--card);margin:6px 0}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.row select{width:auto;flex:1}
+.mut{color:var(--mut);font-size:13px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.chip{border:1px solid var(--bd);background:var(--card);border-radius:99px;padding:5px 12px;font-size:14px;cursor:pointer}
+.chip.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}
+.th{position:relative;border-radius:8px;overflow:hidden;background:#000;aspect-ratio:4/3;cursor:pointer}
+.th img{width:100%;height:100%;object-fit:cover;display:block}
+.th span{position:absolute;left:0;right:0;bottom:0;padding:2px 6px;font-size:12px;background:rgba(0,0,0,.65);color:#fff}
+.stage{position:relative;overflow:hidden;border-radius:8px;background:#000;user-select:none;-webkit-user-select:none}
+.stage img{width:100%;display:block;pointer-events:none}
+.cv{position:absolute;top:0;bottom:0;right:0;background:var(--cv)}
+.hd{position:absolute;left:-22px;top:0;bottom:0;width:44px;touch-action:none;cursor:ew-resize}
+.hd::after{content:"";position:absolute;left:20px;top:0;bottom:0;width:4px;background:var(--ac)}
+.hd::before{content:"";position:absolute;left:8px;top:calc(50% - 14px);width:28px;height:28px;border-radius:50%;background:var(--ac);z-index:1;box-shadow:0 0 0 3px var(--cv)}
+.stage.lock .hd{display:none}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin:8px 0}
+.ok{color:var(--ok);font-weight:700}.ng{color:var(--bad);font-weight:700}
+.modal{position:fixed;inset:0;background:var(--bg);overflow:auto;z-index:9;padding:calc(env(safe-area-inset-top,0px) + 12px) 12px calc(env(safe-area-inset-bottom,0px) + 12px)}
+.modal>div{max-width:720px;margin:0 auto}
+@media (prefers-reduced-motion:reduce){.cv{transition:none!important}}
+</style></head><body>
+<div id="nav"></div><div id="app"></div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let db,imgs=[],pats=[],tab='lib',flt='',q=null;
+try{pats=JSON.parse(localStorage.getItem('pats')||'[]')}catch(e){}
+const savePats=()=>{try{localStorage.setItem('pats',JSON.stringify(pats))}catch(e){}};
+const openDB=()=>new Promise((res,rej)=>{const r=indexedDB.open('chartdrill',1);r.onupgradeneeded=()=>r.result.createObjectStore('imgs',{keyPath:'id'});r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
+const tx=(m,f)=>new Promise((res,rej)=>{const t=db.transaction('imgs',m);const o=f(t.objectStore('imgs'));t.oncomplete=()=>res(o&&o.result);t.onerror=()=>rej(t.error)});
+const put=o=>tx('readwrite',s=>s.put(o)),del=id=>tx('readwrite',s=>s.delete(id));
+const U=new Map(),urlOf=i=>{if(!U.has(i.id))U.set(i.id,URL.createObjectURL(i.blob));return U.get(i.id)};
+async function shrink(f){const b=await createImageBitmap(f),k=Math.min(1,1600/b.width),c=document.createElement('canvas');c.width=b.width*k;c.height=b.height*k;c.getContext('2d').drawImage(b,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,'image/jpeg',.85))}
+
+function stage(url,pos,min,cb){
+  const d=document.createElement('div');d.className='stage';
+  d.innerHTML=`<img src="${url}" draggable="false"><div class="cv"><div class="hd"></div></div>`;
+  const cv=d.querySelector('.cv'),hd=d.querySelector('.hd');
+  d.set=p=>{pos=Math.max(min,Math.min(1,p));cv.style.left=pos*100+'%';cb&&cb(pos)};
+  d.getPos=()=>pos;d.set(pos);
+  hd.onpointerdown=e=>{if(d.classList.contains('lock'))return;hd.setPointerCapture(e.pointerId);cv.style.transition='none';
+    hd.onpointermove=ev=>{const r=d.getBoundingClientRect();d.set((ev.clientX-r.left)/r.width)};hd.onpointerup=()=>{hd.onpointermove=null}};
+  return d}
+
+function tagBox(arr,onchange){
+  const w=document.createElement('div'),fine=[...new Set(imgs.flatMap(i=>i.fine||[]))];
+  w.innerHTML=`<div class="chips"></div><input list="fl" placeholder="細かい分類を入力して Enter"><datalist id="fl">${fine.map(f=>`<option value="${esc(f)}">`).join('')}</datalist>`;
+  const ch=w.querySelector('.chips'),inp=w.querySelector('input');
+  const draw=()=>{ch.innerHTML=arr.map((t,i)=>`<span class="chip" data-i="${i}">${esc(t)} ×</span>`).join('')};
+  ch.onclick=e=>{const i=e.target.dataset.i;if(i!=null){arr.splice(+i,1);draw();onchange&&onchange()}};
+  inp.onkeydown=e=>{if(e.key==='Enter'&&inp.value.trim()){arr.push(inp.value.trim());inp.value='';draw();onchange&&onchange()}};
+  draw();return w}
+
+function patOpts(sel){return '<option value="">パターンを選択</option>'+pats.map(p=>`<option ${p===sel?'selected':''}>${esc(p)}</option>`).join('')+'<option value="__new">＋新しいパターン</option>'}
+function newPat(){const n=(prompt('パターン名')||'').trim();if(n&&!pats.includes(n)){pats.push(n);savePats()}return n}
+
+function editor(rec,isNew,done){
+  const m=document.createElement('div');m.className='modal';
+  m.innerHTML=`<div><b>${isNew?'新規':'編集'}：隠し位置を決める</b><p class="mut">つまみを左右にドラッグ。ここから右が練習中に隠れます。</p><div id="st"></div><select id="ps">${patOpts(rec.pattern)}</select><div id="tb"></div><div class="row"><button class="pri" id="sv">保存</button><button id="cx">キャンセル</button>${isNew?'':'<button class="bad" id="dl">削除</button>'}</div></div>`;
+  document.body.append(m);
+  const st=stage(urlOf(rec),rec.hide,0);m.querySelector('#st').append(st);
+  m.querySelector('#tb').append(tagBox(rec.fine,null));
+  const ps=m.querySelector('#ps');
+  ps.onchange=()=>{if(ps.value==='__new'){const n=newPat();ps.innerHTML=patOpts(n||rec.pattern)}};
+  const close=s=>{m.remove();done(s)};
+  m.querySelector('#cx').onclick=()=>close(false);
+  m.querySelector('#sv').onclick=async()=>{if(!ps.value||ps.value==='__new'){alert('パターンを選んでください');return}
+    rec.pattern=ps.value;rec.hide=st.getPos();await put(rec);close(true)};
+  const dl=m.querySelector('#dl');
+  if(dl)dl.onclick=async()=>{if(confirm('この画像を削除しますか？')){await del(rec.id);imgs=imgs.filter(i=>i!==rec);close(true)}}}
+
+function lib(){
+  const list=imgs.filter(i=>!flt||i.pattern===flt);
+  $('#app').innerHTML=`<div class="row"><label class="btn pri">＋画像を追加<input type="file" accept="image/*" multiple hidden id="fi"></label><button id="np">パターン追加</button><button id="pm">管理</button></div>
+  <div class="chips"><span class="chip ${flt?'':'on'}" data-f="">すべて ${imgs.length}</span>${pats.map(p=>`<span class="chip ${flt===p?'on':''}" data-f="${esc(p)}">${esc(p)} ${imgs.filter(i=>i.pattern===p).length}</span>`).join('')}</div>
+  <div class="grid">${list.map(i=>`<div class="th" data-id="${i.id}"><img src="${urlOf(i)}"><span>${esc(i.pattern)}</span></div>`).join('')}</div>${list.length?'':'<p class="mut">画像がありません。「＋画像を追加」から取り込みます。</p>'}`;
+  $('.chips').onclick=e=>{if(e.target.dataset.f!=null){flt=e.target.dataset.f;lib()}};
+  $('#np').onclick=()=>{newPat();lib()};$('#pm').onclick=manage;
+  $('.grid').onclick=e=>{const t=e.target.closest('.th');if(t)editor(imgs.find(i=>i.id===t.dataset.id),false,render)};
+  $('#fi').onchange=async e=>{for(const f of e.target.files){
+    const rec={id:Date.now()+'-'+Math.random().toString(36).slice(2),blob:await shrink(f),hide:.5,pattern:flt||pats[0]||'',fine:[],log:[]};
+    const saved=await new Promise(r=>editor(rec,true,r));if(saved)imgs.push(rec)}render()}}
+
+function manage(){
+  const m=document.createElement('div');m.className='modal';
+  const draw=()=>{m.innerHTML=`<div><b>パターン管理</b><p class="mut">既にあるパターン名に変更すると統合されます。</p>${pats.map((p,i)=>`<div class="card"><b>${esc(p)}</b> <span class="mut">${imgs.filter(x=>x.pattern===p).length}枚</span><div class="row"><button data-r="${i}">名前変更</button><button class="bad" data-d="${i}">削除</button></div></div>`).join('')||'<p class="mut">パターンがありません。</p>'}<button id="cl">閉じる</button></div>`};
+  draw();document.body.append(m);
+  m.onclick=async e=>{const t=e.target;
+    if(t.id==='cl'){m.remove();render();return}
+    if(t.dataset.r!=null){const i0=+t.dataset.r,old=pats[i0],n=(prompt('新しい名前',old)||'').trim();if(!n||n===old)return;
+      if(pats.includes(n)&&!confirm('「'+n+'」に統合しますか？'))return;
+      for(const i of imgs.filter(x=>x.pattern===old)){i.pattern=n;await put(i)}
+      pats.splice(i0,1);if(!pats.includes(n))pats.splice(i0,0,n);savePats();if(flt===old)flt=n;draw()}
+    if(t.dataset.d!=null){const p=pats[+t.dataset.d];
+      if(imgs.some(x=>x.pattern===p)){alert('画像が残っています。別のパターン名に変更して統合してください。');return}
+      pats.splice(+t.dataset.d,1);savePats();draw()}}}
+
+function drill(){
+  const a=$('#app'),pool=imgs.filter(i=>!flt||i.pattern===flt);
+  if(!imgs.length){a.innerHTML='<p class="mut">先にライブラリへ画像を登録してください。</p>';return}
+  if(!q||!pool.includes(q.rec)){const c=pool.filter(i=>i!==prev),p=c.length?c:pool;q={rec:p[Math.floor(Math.random()*p.length)],done:false}}
+  const r=q.rec;
+  a.innerHTML=`<div class="row"><select id="ff"><option value="">全パターンから出題</option>${pats.map(p=>`<option ${flt===p?'selected':''}>${esc(p)}</option>`).join('')}</select><span class="mut">${pool.length}枚</span></div><div id="st"></div><div id="ans"></div>`;
+  $('#ff').onchange=e=>{flt=e.target.value;q=null;drill()};
+  const st=stage(urlOf(r),r.hide,r.hide);st.classList.toggle('lock',!q.done);$('#st').append(st);
+  const ans=$('#ans');
+  if(!q.done){
+    ans.innerHTML='<p>この後、どのパターンになる？</p><div class="chips">'+pats.map(p=>`<button data-p="${esc(p)}">${esc(p)}</button>`).join('')+'</div>';
+    ans.onclick=async e=>{const p=e.target.dataset.p;if(!p)return;r.log.push({g:p,ok:p===r.pattern,t:Date.now()});await put(r);q.done=true;q.guess=p;drill()}}
+  else{
+    const ok=q.guess===r.pattern;
+    st.querySelector('.cv').style.transition='left .7s ease';setTimeout(()=>st.set(1),60);
+    ans.innerHTML=`<p class="${ok?'ok':'ng'}">${ok?'正解':'不正解'}　答え：${esc(r.pattern)}${ok?'':'（予想：'+esc(q.guess)+'）'}</p><b>細かい分類</b>`;
+    ans.append(tagBox(r.fine,()=>put(r)));
+    const n=document.createElement('button');n.className='pri';n.textContent='次の問題';n.onclick=()=>{prev=r;q=null;drill()};ans.append(n)}}
+let prev=null;
+
+function stat(){
+  const rows=pats.map(p=>{const L=imgs.filter(i=>i.pattern===p),lg=L.flatMap(i=>i.log||[]),ok=lg.filter(x=>x.ok).length,ft={};
+    L.forEach(i=>(i.fine||[]).forEach(f=>ft[f]=(ft[f]||0)+1));
+    return `<div class="card"><b>${esc(p)}</b><div class="mut">${L.length}枚 ／ 回答${lg.length}回 ／ 正解率 ${lg.length?Math.round(ok/lg.length*100)+'%':'-'}</div><div class="chips">${Object.entries(ft).sort((x,y)=>y[1]-x[1]).map(([f,n])=>`<span class="chip">${esc(f)} ${n}</span>`).join('')||'<span class="mut">細かい分類はまだありません</span>'}</div></div>`}).join('');
+  $('#app').innerHTML=rows||'<p class="mut">パターンを登録すると、ここに成績が表示されます。</p>'}
+
+function render(){
+  $('#nav').innerHTML=[['lib','ライブラリ'],['drill','練習'],['stat','成績']].map(([k,l])=>`<button class="${tab===k?'on':''}" onclick="go('${k}')">${l}</button>`).join('');
+  ({lib,drill,stat})[tab]()}
+window.go=k=>{tab=k;if(k==='drill')q=null;render()};
+(async()=>{try{db=await openDB();imgs=await tx('readonly',s=>s.getAll())||[]}catch(e){$('#app').innerHTML='<p>この環境ではデータを保存できません。ブラウザの設定を確認してください。</p>';return}render()})();
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+</script></body></html>
