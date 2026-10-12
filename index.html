@@ -10,6 +10,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="icon-192.png">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
 :root{--bg:#eef0f3;--fg:#15181d;--card:#fff;--mut:#667080;--ac:#d9932b;--bd:#d5d9e0;--ok:#1d8a5a;--bad:#c4402f;--cv:#07090c;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0d1014;--fg:#e6e9ee;--card:#171b21;--mut:#8f99a8;--bd:#2a313b}}
@@ -55,10 +56,11 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let db,imgs=[],pats=[],tab='lib',flt='',q=null;
 try{pats=JSON.parse(localStorage.getItem('pats')||'[]')}catch(e){}
-const savePats=()=>{try{localStorage.setItem('pats',JSON.stringify(pats))}catch(e){}};
+const savePats=()=>{try{localStorage.setItem('pats',JSON.stringify(pats));localStorage.setItem('patsUpd',Date.now())}catch(e){}};
 const openDB=()=>new Promise((res,rej)=>{const r=indexedDB.open('chartdrill',1);r.onupgradeneeded=()=>r.result.createObjectStore('imgs',{keyPath:'id'});r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
 const tx=(m,f)=>new Promise((res,rej)=>{const t=db.transaction('imgs',m);const o=f(t.objectStore('imgs'));t.oncomplete=()=>res(o&&o.result);t.onerror=()=>rej(t.error)});
-const put=o=>tx('readwrite',s=>s.put(o)),del=id=>tx('readwrite',s=>s.delete(id));
+const putRaw=o=>tx('readwrite',s=>s.put(o)),put=o=>{o.upd=Date.now();return putRaw(o)};
+const del=id=>{try{const L=JSON.parse(localStorage.getItem('del')||'{}');L[id]=Date.now();localStorage.setItem('del',JSON.stringify(L))}catch(e){}return tx('readwrite',s=>s.delete(id))};
 const U=new Map(),urlOf=i=>{if(!U.has(i.id))U.set(i.id,URL.createObjectURL(i.blob));return U.get(i.id)};
 async function shrink(f){const b=await createImageBitmap(f),k=Math.min(1,1600/b.width),c=document.createElement('canvas');c.width=b.width*k;c.height=b.height*k;c.getContext('2d').drawImage(b,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,'image/jpeg',.85))}
 
@@ -151,11 +153,63 @@ function stat(){
     return `<div class="card"><b>${esc(p)}</b><div class="mut">${L.length}枚 ／ 回答${lg.length}回 ／ 正解率 ${lg.length?Math.round(ok/lg.length*100)+'%':'-'}</div><div class="chips">${Object.entries(ft).sort((x,y)=>y[1]-x[1]).map(([f,n])=>`<span class="chip">${esc(f)} ${n}</span>`).join('')||'<span class="mut">細かい分類はまだありません</span>'}</div></div>`}).join('');
   $('#app').innerHTML=rows||'<p class="mut">パターンを登録すると、ここに成績が表示されます。</p>'}
 
+const CID='1022805274748-9itaovf4vfphtauf7bjt00k6vqhojlia.apps.googleusercontent.com',SC='https://www.googleapis.com/auth/drive.file';
+const D='https://www.googleapis.com/drive/v3/files',UP='https://www.googleapis.com/upload/drive/v3/files';
+let tok=null,tokExp=0,syncing=false;
+const getTok=()=>new Promise((res,rej)=>{
+  if(tok&&Date.now()<tokExp-60000)return res(tok);
+  if(!window.google||!google.accounts)return rej(new Error('Googleに接続できません（オンラインか確認してください）'));
+  const tc=google.accounts.oauth2.initTokenClient({client_id:CID,scope:SC,
+    callback:r=>{if(r.error)return rej(new Error(r.error));tok=r.access_token;tokExp=Date.now()+r.expires_in*1000;try{localStorage.setItem('gd','1')}catch(e){}res(tok)},
+    error_callback:e=>rej(new Error(e.type||'ログインできませんでした'))});
+  tc.requestAccessToken({prompt:localStorage.getItem('gd')?'':'consent'})});
+const api=async(u,o={})=>{const t=await getTok();const r=await fetch(u,{...o,headers:{...(o.headers||{}),Authorization:'Bearer '+t}});if(!r.ok)throw new Error('Drive '+r.status);return r};
+const qs=q=>D+'?fields=files(id)&q='+encodeURIComponent(q);
+async function getFolder(){let j=await(await api(qs("name='chart-drill' and mimeType='application/vnd.google-apps.folder' and trashed=false"))).json();
+  if(j.files[0])return j.files[0].id;
+  j=await(await api(D,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'chart-drill',mimeType:'application/vnd.google-apps.folder'})})).json();return j.id}
+async function upFile(name,fid,blob,type){const b='cd'+Date.now(),meta=JSON.stringify({name,parents:[fid]});
+  const body=new Blob([`--${b}\r\nContent-Type: application/json\r\n\r\n${meta}\r\n--${b}\r\nContent-Type: ${type}\r\n\r\n`,blob,`\r\n--${b}--`]);
+  return(await(await api(UP+'?uploadType=multipart&fields=id',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+b},body})).json()).id}
+const metaOf=l=>({fid:l.fid,hide:l.hide,pattern:l.pattern,fine:l.fine||[],log:l.log||[],upd:l.upd||0});
+const mergeLog=(a=[],b=[])=>{const m=new Map();[...a,...b].forEach(x=>m.set(x.t,x));return[...m.values()].sort((x,y)=>x.t-y.t)};
+async function sync(say){
+  const fid=await getFolder();
+  const mj=await(await api(qs(`name='meta.json' and '${fid}' in parents and trashed=false`))).json(),mid=mj.files[0]&&mj.files[0].id;
+  let R={pats:[],patsUpd:0,items:{},del:{}},dirty=!mid;
+  if(mid)R={...R,...await(await api(`${D}/${mid}?alt=media`)).json()};
+  const L=JSON.parse(localStorage.getItem('del')||'{}');
+  for(const id in L){if(R.items[id]){try{await api(`${D}/${R.items[id].fid}`,{method:'DELETE'})}catch(e){}delete R.items[id];dirty=true}
+    if(!(id in R.del)){R.del[id]=L[id];dirty=true}}
+  for(const id in R.del){const r=imgs.find(i=>i.id===id);if(r){await del(id);imgs=imgs.filter(i=>i!==r)}}
+  for(const id in R.items){if(R.del[id])continue;const m=R.items[id];let l=imgs.find(i=>i.id===id);
+    if(!l){say('取得中…');const blob=await(await api(`${D}/${m.fid}?alt=media`)).blob();
+      l={id,blob,hide:m.hide,pattern:m.pattern,fine:m.fine||[],log:m.log||[],upd:m.upd||0,fid:m.fid};imgs.push(l);await putRaw(l);continue}
+    let ch=false;
+    if((m.upd||0)>(l.upd||0)){Object.assign(l,{hide:m.hide,pattern:m.pattern,fine:m.fine||[],upd:m.upd,fid:m.fid});ch=true}
+    else if((l.upd||0)>(m.upd||0)){Object.assign(m,metaOf(l));dirty=true}
+    const lg=mergeLog(l.log,m.log);
+    if(lg.length!==(l.log||[]).length){l.log=lg;ch=true}
+    if(lg.length!==(m.log||[]).length){m.log=lg;dirty=true}
+    if(ch)await putRaw(l)}
+  for(const l of imgs){if(!R.items[l.id]&&!R.del[l.id]){say('アップ中…');l.fid=await upFile('img_'+l.id+'.jpg',fid,l.blob,'image/jpeg');await putRaw(l);R.items[l.id]=metaOf(l);dirty=true}}
+  const lp=+localStorage.getItem('patsUpd')||0;
+  if((R.patsUpd||0)>lp){pats=R.pats.slice();try{localStorage.setItem('pats',JSON.stringify(pats));localStorage.setItem('patsUpd',R.patsUpd)}catch(e){}}
+  imgs.forEach(i=>{if(i.pattern&&!pats.includes(i.pattern))pats.push(i.pattern)});
+  if(JSON.stringify(pats)!==JSON.stringify(R.pats)){R.pats=pats.slice();savePats();R.patsUpd=+localStorage.getItem('patsUpd');dirty=true}
+  if(dirty){const body=JSON.stringify(R);
+    if(mid)await api(`${UP}/${mid}?uploadType=media`,{method:'PATCH',headers:{'Content-Type':'application/json'},body});
+    else await upFile('meta.json',fid,new Blob([body]),'application/json')}}
+window.doSync=async quiet=>{if(syncing)return;syncing=true;const set=t=>{const b=$('#sy');if(b)b.textContent=t};set('同期中…');
+  try{await sync(set);set('☁ 完了');render()}
+  catch(e){set('☁ 同期');if(!quiet)alert('同期に失敗しました：'+e.message)}
+  finally{syncing=false;setTimeout(()=>set('☁ 同期'),2500)}};
+
 function render(){
-  $('#nav').innerHTML=[['lib','ライブラリ'],['drill','練習'],['stat','成績']].map(([k,l])=>`<button class="${tab===k?'on':''}" onclick="go('${k}')">${l}</button>`).join('');
+  $('#nav').innerHTML=[['lib','ライブラリ'],['drill','練習'],['stat','成績']].map(([k,l])=>`<button class="${tab===k?'on':''}" onclick="go('${k}')">${l}</button>`).join('')+`<button id="sy" style="flex:0 0 auto" onclick="doSync()">☁ 同期</button>`;
   ({lib,drill,stat})[tab]()}
 window.go=k=>{tab=k;if(k==='drill')q=null;render()};
-(async()=>{try{db=await openDB();imgs=await tx('readonly',s=>s.getAll())||[]}catch(e){$('#app').innerHTML='<p>この環境ではデータを保存できません。ブラウザの設定を確認してください。</p>';return}render()})();
+(async()=>{try{db=await openDB();imgs=await tx('readonly',s=>s.getAll())||[]}catch(e){$('#app').innerHTML='<p>この環境ではデータを保存できません。ブラウザの設定を確認してください。</p>';return}render();if(localStorage.getItem('gd'))doSync(true)})();
 if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
 </script></body></html>
